@@ -1,17 +1,9 @@
 from sklearn.decomposition import PCA
-import os
+from globals import *
 import pandas as pd
 import numpy as np
 import anndata
 import logging
-
-ROOT_PATH = "/Users/Morgie/Desktop/Projects/tcga-surv"
-DATA_PATH = os.path.join(ROOT_PATH, "TCGA-data")
-CLINICAL_TSV_PATH = os.path.join(DATA_PATH, "clinical.tsv")
-def feature_path_for(feature_type: str) -> str:
-    return os.path.join(DATA_PATH, f"X_{feature_type}.h5ad")
-
-ELIGIBLE_FEATURE_TYPES = ["expr", "text", "hist_mean", "hist_max"]
 
 # Returns clinical data as well as a map of feature type to feature data.
 # The requested feature data is given by the argument, feature_types.
@@ -60,7 +52,7 @@ def get_joined_feature_data(feature_map: dict[str, pd.DataFrame]) -> pd.DataFram
 #   * Invalid clinical rows where outcomes are not usable will be removed
 #   * Rows which are not in ALL feature/clin dataframes will be removed. This means we can treat all feature subsets as coming from the same data.
 #   * Feature data columns are strings
-def preharmonize_and_clean(clin_data: pd.DataFrame, feature_data_map: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+def harmonize_and_clean(clin_data: pd.DataFrame, feature_data_map: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     clin_data[["days_to_death", "days_to_last_follow_up"]] = clin_data[["days_to_death", "days_to_last_follow_up"]].replace("'--", "-1").astype(float).astype(int)
     invalid_outcomes = clin_data[(clin_data["days_to_death"] < 0) & (clin_data["days_to_last_follow_up"] < 0)].index
     for feature_type in feature_data_map:
