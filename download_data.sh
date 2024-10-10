@@ -1,0 +1,8 @@
+set -e
+mkdir TCGA-data
+cd TCGA-data
+gdown 17FwoKgPwFRtPhs5FKQFE_fsFCrXGQ-EQ
+gdown 1aEDKgepRVqADFcAcSFCLdfBgUr7XRGcd
+gdown 1c1tEf8DE-yoJDpAOH7oAigikCKf32nZE
+gdown 1d1GsNCpCwX9fj_xeKlcRy5bKILk83BQY
+gdown 1tabz7if9Ru1NryAP3NRrd71MYzsbRcnC
