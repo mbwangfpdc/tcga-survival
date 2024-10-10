@@ -1,5 +1,6 @@
 from sklearn.decomposition import PCA
-from globals import *
+from globals import ELIGIBLE_FEATURE_TYPES, CLINICAL_TSV_PATH, feature_path_for
+from utils import configure_logger, feature_label
 import pandas as pd
 import numpy as np
 import anndata
@@ -25,6 +26,7 @@ def load_raw_data(feature_types: list[str] = []) -> tuple[pd.DataFrame, dict[str
 
 # Apply PCA to extract the N most significant features of a dataframe
 def pca_feature(feature_data: pd.DataFrame, features_to_keep: int, normalize: bool = True) -> pd.DataFrame:
+    configure_logger()
     if features_to_keep <= 0 or features_to_keep >= feature_data.shape[1]:
         return
     logging.info(f"Using PCA to reduce {feature_data.shape[1]} dimensions to {features_to_keep}")
@@ -74,3 +76,13 @@ def harmonize_and_clean(clin_data: pd.DataFrame, feature_data_map: dict[str, pd.
     logging.info(f"The intersection of clinical and feature data is of size {len(clin_data)}")
 
     return clin_data, feature_data_map
+
+def join_features(feature_data_map: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    configure_logger()
+    label = feature_label(feature_data_map.keys())
+    logging.info(f"START JOIN {label}")
+    assert set(feature_data_map.keys()).issubset(ELIGIBLE_FEATURE_TYPES)
+    feature_data = get_joined_feature_data(feature_data_map)
+    feature_data.columns = feature_data.columns.astype(str)
+    logging.info(f"Join {label} finished!")
+    return feature_data

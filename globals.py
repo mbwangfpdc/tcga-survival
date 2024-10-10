@@ -1,7 +1,7 @@
 import os
 import datetime
 
-ROOT_PATH = "/Users/Morgie/Desktop/Projects/tcga-surv"
+ROOT_PATH = os.path.dirname(__file__)
 OUTPUT_PATH = os.path.join(ROOT_PATH, "results")
 # Make a new unique results directory in results, then return the path
 def make_results_dir() -> str:
