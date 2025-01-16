@@ -1,62 +1,34 @@
+#!/usr/bin/env python3
+
 from sklearn import set_config
-from sksurv.linear_model import CoxPHSurvivalAnalysis
+from sklearn.model_selection import StratifiedKFold
+from sksurv.linear_model import CoxPHSurvivalAnalysis, IPCRidge
+from sksurv.metrics import as_concordance_index_ipcw_scorer, concordance_index_ipcw
 from joblib import Parallel, delayed, parallel_config
-from dataprep import *
-from utils import *
+from collections import defaultdict
+from scipy.stats import rankdata
 import pandas as pd
 import numpy as np
+import statistics as stats
 import time
 import logging
 import os
+import json
+
+from dataprep import *
+from globals import *
+from utils import *
+from train import dispatch_train, TrainInputs, SINGLE_THREADED_MODELS
+from parser import parse
+
+# Consume a stream of (train_data, test_data) and emit a stream of PCA-reduced train, test) pairs
+# def pca_feature_data_parallel(train_data: pd.DataFrame,
+#     test_data: pd.DataFrame,
+#     args: argparse.Namespace,):
+#     return pd.DataFrame(pca.transform(df), index=df.index)
 
 
-def train_cph(
-    outcomes: pd.DataFrame,
-    feature_data: pd.DataFrame,
-    test_fold: set[str],  # All indices not in this set are training samples
-) -> tuple[CoxPHSurvivalAnalysis, float]:
-    configure_logger()
-    logging.info("START TRAINING")
-    test_outcomes, train_outcomes = split_df(outcomes, test_fold)
-    test_feature_data, train_feature_data = split_df(feature_data, test_fold)
-
-    start = time.time()
-    estimator = CoxPHSurvivalAnalysis(alpha=0.01)
-    estimator.fit(train_feature_data, train_outcomes.to_records(index=False))
-    score = estimator.score(test_feature_data, test_outcomes.to_records(index=False))
-    logging.info(
-        f"Finished training after {time.time() - start} seconds, score is {score}"
-    )
-    return estimator, score
-
-
-def dump_model_output(results_dir: str, ):
-    pass
-    # TODO: Take in the run directory and the model id, create an output dir, then dump all the results stuff here
-    # A later phase will aggregate the folds and compare the different features
-
-
-if __name__ == "__main__":
-    start = time.time()
-    configure_logger()
-    set_config(display="text")  # displays text representation of estimators
-
-    ELIGIBLE_FEATURE_TYPES = set(["expr", "text", "hist_mean", "hist_max"])
-    N_FOLDS = 3
-    FEATURES_TO_KEEP = 256
-
-    clin_data, feature_data_map = load_raw_data(ELIGIBLE_FEATURE_TYPES)
-    clin_data, feature_data_map = harmonize_and_clean(
-        clin_data=clin_data, feature_data_map=feature_data_map
-    )
-
-    folds = [
-        set(subset)
-        for subset in np.array_split(
-            clin_data.sample(frac=1, random_state=0).index.to_numpy(), N_FOLDS
-        )
-    ]
-
+def prepare_outcomes(clin_data: pd.DataFrame) -> pd.DataFrame:
     outcomes = clin_data[["days_to_death", "days_to_last_follow_up"]].copy()
     # Days to death is either -1 (no death before censoring) or greater than days_to_last_follow_up,
     # we can just take the max to get the days to censor | death
@@ -64,67 +36,202 @@ if __name__ == "__main__":
         ["days_to_death", "days_to_last_follow_up"]
     ].max(axis=1)
     outcomes["death_witnessed"] = outcomes["days_to_death"] != -1
-    logging.info(
+    logging.debug(
         f"{len(outcomes[outcomes['death_witnessed']])} deaths witnessed out of {len(outcomes)} total samples"
     )
+    return outcomes[["death_witnessed", "days_to_event"]]
 
-    # Feature sets to try
-    feature_subsets = [
-        set(subset)
-        for subset in [
-            ["expr"],
-            ["text"],
-            ["hist_mean"],
-            ["hist_max"],
-            ["expr", "text"],
-            ["expr", "hist_mean"],
-            ["expr", "hist_max"],
-            ["text", "hist_mean"],
-            ["text", "hist_max"],
-            ["expr", "text", "hist_mean"],
-            ["expr", "text", "hist_max"],
-        ]
+
+def main():
+    args = parse()
+
+    start = time.time()
+    configure_logger()
+    set_config(display="text")  # displays text representation of estimators
+
+    run_dir = os.path.join(OUTPUT_PATH, args.rundir)
+    os.makedirs(run_dir, exist_ok=True)
+    logging.info(f"Created run directory at {run_dir}")
+
+    # All data is always loaded from disk to make the datasets between modalities identical
+    clin_data, raw_feature_data_map = load_raw_data(ELIGIBLE_FEATURE_TYPES)
+    clin_data, raw_feature_data_map = harmonize_and_clean(
+        clin_data=clin_data, feature_data_map=raw_feature_data_map
+    )
+    for feature_type in list(raw_feature_data_map.keys()):
+        if feature_type not in args.features and feature_type not in args.solo_features:
+            del raw_feature_data_map[feature_type]
+
+    skf = StratifiedKFold(args.folds, shuffle=True, random_state=args.rand_state)
+    folds = [
+        train_test
+        for train_test in skf.split(
+            clin_data, clin_data["project_id"].astype("category").cat.codes
+        )
     ]
 
-    logging.info("initializing loky backend...")
-    with parallel_config(backend="loky", n_jobs=20):
-        logging.info(
-            f"Using PCA to reduce features to {FEATURES_TO_KEEP} most important dimensions"
-        )
-        for feature_type, reduced_feature in zip(
-            feature_data_map.keys(),
-            Parallel()(
-                delayed(pca_feature)(feature_data, FEATURES_TO_KEEP)
-                for feature_data in feature_data_map.values()
-            ),
-        ):
-            feature_data_map[feature_type] = reduced_feature
+    logging.info(f"Splitting data into {args.folds} folds...")
+    outcomes = prepare_outcomes(clin_data)
+    train_outcomes = []
+    test_outcomes = []
+    for train, test in folds:
+        train_outcomes.append(outcomes.iloc[train].to_records(index=False))
+        test_outcomes.append(outcomes.iloc[test].to_records(index=False))
+    # folded_outcomes = [
+    #     (outcomes.iloc[train], outcomes.iloc[test]) for train, test in folds
+    # ]
+    train_feature_data = []
+    test_feature_data = []
+    # folded_feature_data = []
+    for train, test in folds:
+        train_map = {}
+        test_map = {}
+        for feature_type, feature_data in raw_feature_data_map.items():
+            train_map[feature_type] = feature_data.iloc[train]
+            test_map[feature_type] = feature_data.iloc[test]
+        train_feature_data.append(train_map)
+        test_feature_data.append(test_map)
+    # Feature sets to try.
+    feature_subsets: list[set[str]] = get_feature_sets(args.features) + [
+        set([f]) for f in args.solo_features
+    ]
+    feature_subsets.sort(key=feature_id)
 
-        # For each feature subset requested, join them.
-        logging.info(
-            f"Merging features for each requested feature subset (feature subsets requested: {feature_subsets})"
-        )
-        joined_data = Parallel()(
-            delayed(join_features)({ft: feature_data_map[ft] for ft in feature_subset})
-            for feature_subset in feature_subsets
-        )
-
-        train_inputs = []
-        for feature_subset, feature_data in zip(feature_subsets, joined_data):
-            for i, fold in enumerate(folds):
-                train_inputs.append((feature_subset, feature_data, i, fold))
-        logging.info(
-            f"Training with {len(feature_subsets)} feature subsets and {N_FOLDS} folds per subset for a total of {len(train_inputs)} jobs on {os.cpu_count()} logical cpus"
-        )
-        output_gen = Parallel(return_as="generator")(
-            delayed(train_cph)(
-                outcomes[["death_witnessed", "days_to_event"]], feature_data, fold
+    logging.debug("initializing loky backend...")
+    with parallel_config(backend="loky", n_jobs=-3):
+        if args.pca_pre_join > 0:
+            logging.info(
+                f"Using PCA to reduce features to {args.pca_pre_join} most important dimensions..."
             )
-            for (_, feature_data, _, fold) in train_inputs
+            pca_inputs = [
+                (fold, ft) for fold, fdm in enumerate(test_feature_data) for ft in fdm
+            ]
+            reducer_output = Parallel(
+                return_as="generator", n_jobs=min(os.cpu_count() - 2, len(pca_inputs))
+            )(
+                delayed(pca_feature_data)(
+                    train_feature_data[fold][ft],
+                    test_feature_data[fold][ft],
+                    args.pca_pre_join,
+                    args,
+                )
+                for fold, ft in pca_inputs
+            )
+            for (fold, ft), (train, test) in zip(pca_inputs, reducer_output):
+                train_feature_data[fold][ft] = train
+                test_feature_data[fold][ft] = test
+
+        if args.ensemble == "cat":
+            def cat_unimodal_data(data_maps: list[dict[str, pd.DataFrame]]):
+                for fold in range(args.folds):
+                    for feature_subset in feature_subsets:
+                        if len(feature_subset) > 1:
+                            fid = feature_id(feature_subset)
+                            data_maps[fold][fid] = join_features(
+                                {ft: data_maps[fold][ft] for ft in feature_subset}
+                            )
+            cat_unimodal_data(train_feature_data)
+        train_inputs: list[TrainInputs] = []
+        for fold, feature_data_map in enumerate(train_feature_data):
+            for feature, feature_data in feature_data_map.items():
+                train_inputs.append(
+                    (
+                        TrainInputs(
+                            outcomes=train_outcomes[fold],
+                            data=feature_data,
+                            model_id=f"{feature}_{fold}",
+                        ),
+                        fold,
+                        feature,
+                    )
+                )
+        # for fold, fdm in enumerate(folded_feature_data):
+        #     for feature_subset in feature_subsets:
+        #         train_inputs.append(
+        #             TrainInputs(
+        #                 train_outcomes=folded_outcomes[fold][0],
+        #                 test_outcomes=folded_outcomes[fold][1],
+        #                 train_data={k: fdm[k][0] for k in feature_subset},
+        #                 test_data={k: fdm[k][1] for k in feature_subset},
+        #                 model_id=f"{feature_id(feature_subset)}_{fold}",
+        #             )
+        #         )
+        # We want to schedule longer single-threaded models first,
+        # and shorter multi-threaded models first
+        long_model_first = args.model in SINGLE_THREADED_MODELS
+        train_inputs.sort(
+            key=lambda inp_tuple: inp_tuple[0].data.shape[1],
+            reverse=long_model_first,
+        )
+        logging.info(
+            f"Training with {len(feature_subsets)} feature sets and {args.folds} folds per subset for a total of {len(train_inputs)} models"
+        )
+        output_gen = dispatch_train(
+            inputs=list(map(lambda inp_tuple: inp_tuple[0], train_inputs)),
+            args=args,
         )
 
-        for (feature_subset, _, i, _), (model, score) in zip(train_inputs, output_gen):
-            logging.info(f"{feature_label(feature_subset)}_{i} scored {score}")
-            # TODO: In the training method, return a dataframe which contains the model's survival curve for each sample
+        models = [{} for _ in range(args.folds)]
+        for (_, fold, featureset), model in zip(train_inputs, output_gen):
+            models[fold][featureset] = model
+
+        scores = [{} for _ in range(args.folds)]
+        if args.ensemble == "cat":
+            # TODO: Relieve memory pressure by dropping training data
+            train_inputs = []
+            train_feature_data = []
+            # Now, as late as possible, cat test data for evaluation
+            cat_unimodal_data(test_feature_data)
+            for fold, model_map in enumerate(models):
+                for featureset, model in model_map.items():
+                    scores[fold][featureset] = model.score(
+                        test_feature_data[fold][featureset], test_outcomes[fold]
+                    )
+        elif args.ensemble in ["mean", "meanrank", "cox", "ipcr"]:
+            for fold, model_map in enumerate(models):
+                pred_map = {
+                    feature: model.predict(test_feature_data[fold][feature])
+                    for feature, model in model_map.items()
+                }
+                for feature_subset in feature_subsets:
+                    predictions = np.array([pred_map[f] for f in feature_subset]).transpose()
+                    # subpredictions = map(lambda pre)
+                    if args.ensemble == "mean":
+                        predictions = np.mean(predictions, axis=1)
+                    elif args.ensemble == "meanrank":
+                        ranks = np.apply_along_axis(rankdata, 0, predictions)
+                        predictions = np.mean(ranks, axis=1)
+                    elif args.ensemble == "cox":
+                        metamodel = CoxPHSurvivalAnalysis()
+                        # TODO: should we parallelize this?
+                        metamodel.fit(predictions, test_outcomes[fold])
+                        predictions = metamodel.predict(predictions)
+                    elif args.ensemble == "ipcr":
+                        metamodel = IPCRidge(random_state=args.rand_state)
+                        # TODO: should we parallelize this?
+                        metamodel.fit(predictions, test_outcomes[fold])
+                        predictions = metamodel.predict(predictions)
+                    scores[fold][feature_id(feature_subset)] = concordance_index_ipcw(
+                        train_outcomes[fold],
+                        test_outcomes[fold],
+                        predictions,
+                    )[0] # TODO: is there any use for the other components? maybe consider saving
+        else:
+            # Unreachable
+            assert False
+        with open(os.path.join(run_dir, "run.json"), "w+") as run_json:
+            run = {}
+            run["args"] = vars(args)
+            run["scores"] = defaultdict(lambda: [0] * args.folds)
+            for fold, score_map in enumerate(scores):
+                for model_type, score in score_map.items():
+                    run["scores"][model_type][fold] = score
+            for model_type, scores in run["scores"].items():
+                logging.info(f"{model_type},{stats.mean(scores)},{stats.stdev(scores)}")
+            json.dump(run, run_json)
 
     logging.info(f"Finished in {time.time() - start} seconds total.")
+
+
+if __name__ == "__main__":
+    main()

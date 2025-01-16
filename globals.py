@@ -3,23 +3,21 @@ import datetime
 
 ROOT_PATH = os.path.dirname(__file__)
 OUTPUT_PATH = os.path.join(ROOT_PATH, "results")
-
-
-# Make a new unique results directory in results, then return the path
-def make_results_dir() -> str:
-    now = datetime.datetime.now()
-    formatted_datetime = now.strftime("%Y-%m-%d-%H:%M:%S")
-    new_results_dir = os.path.join(OUTPUT_PATH, formatted_datetime)
-    os.makedirs(new_results_dir)
-    return new_results_dir
-
-
 DATA_PATH = os.path.join(ROOT_PATH, "TCGA-data")
 CLINICAL_TSV_PATH = os.path.join(DATA_PATH, "clinical.tsv")
 
 
-def feature_path_for(feature_type: str) -> str:
-    return os.path.join(DATA_PATH, f"X_{feature_type}.h5ad")
-
-
-ELIGIBLE_FEATURE_TYPES = ["expr", "text", "hist_mean", "hist_max"]
+ELIGIBLE_MODEL_TYPES = ["cox", "ipcr", "rf", "gb", "est", "cgb"]
+FEATURE_ID_DELIM = "-"
+ELIGIBLE_FEATURE_TYPES = frozenset(["project", "demo", "cancer", "expr", "rawexpr", "text", "text_sum_bm", "text_sum_co", "hist_mean", "hist_max"])
+# Thee feature types have duplicated data somehow and shouldn't be used together
+# TODO: Maybe using them together wouldn't be a bad idea...? Something interesting to try
+INCOMPATIBLE_FEATURE_TYPES = [
+    frozenset(["expr", "rawexpr"]),
+    frozenset(["hist_mean", "hist_max"]),
+    frozenset(["text", "text_sum_bm", "text_sum_co"]),
+]
+for ft in ELIGIBLE_FEATURE_TYPES:
+    assert FEATURE_ID_DELIM not in ft
+for ift_set in INCOMPATIBLE_FEATURE_TYPES:
+    assert ift_set.issubset(ELIGIBLE_FEATURE_TYPES)

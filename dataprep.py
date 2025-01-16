@@ -1,20 +1,26 @@
 from sklearn.decomposition import PCA
-from globals import ELIGIBLE_FEATURE_TYPES, CLINICAL_TSV_PATH, feature_path_for
-from utils import configure_logger, feature_label
+from globals import ELIGIBLE_FEATURE_TYPES, CLINICAL_TSV_PATH, DATA_PATH
+from utils import configure_logger, feature_id
+from argparse import Namespace
 import pandas as pd
 import numpy as np
 import anndata
 import logging
+import os
+
+
+def feature_path_for(feature_type: str) -> str:
+    return os.path.join(DATA_PATH, f"X_{feature_type}.h5ad")
 
 
 # Returns clinical data as well as a map of feature type to feature data.
 # The requested feature data is given by the argument, feature_types.
 # If feature_types is not provided, all feature data is used.
 def load_raw_data(
-    feature_types: list[str] = [],
+    feature_types: set[str] = set(),
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     # We can arbitrarily drop duplicates since the rows duplicated on case id are the same for our purposes
-    logging.info("Reading clinical data from disk...")
+    logging.debug("Reading clinical data from disk...")
     clin_data = (
         pd.read_csv(CLINICAL_TSV_PATH, sep="\t")
         .drop_duplicates(subset=["case_submitter_id"])
@@ -22,46 +28,25 @@ def load_raw_data(
     )
     raw_feature_data_map = {}
     for feature_type in feature_types if feature_types else ELIGIBLE_FEATURE_TYPES:
-        logging.info("Reading feature %s from disk...", feature_type)
+        logging.debug("Reading feature %s from disk...", feature_type)
         feature_anndata = anndata.read_h5ad(feature_path_for(feature_type))
-        # Hack to extract the pooling type from hist. The variable name for this
-        # feature vector is just hist, even though the files are named by the pooling type
-        # This hack makes it so feature names cannot contain an _, unless they mean
-        # something like pooling. Sorry everyone lol
-        raw_feature_data_map[feature_type] = pd.DataFrame(
-            feature_anndata.obsm[f"X_{feature_type.split('_')[0]}"],
+        feature_df = pd.DataFrame(
+            feature_anndata.obsm[f"X_{feature_type}"],
             index=feature_anndata.obs.index,
         )
+        raw_feature_data_map[feature_type] = feature_df
+        logging.debug("Feature %s has %s rows and %s columns", feature_type, len(feature_df), len(feature_df.columns))
     return clin_data, raw_feature_data_map
-
-
-# Apply PCA to extract the N most significant features of a dataframe
-def pca_feature(
-    feature_data: pd.DataFrame, features_to_keep: int, normalize: bool = True
-) -> pd.DataFrame:
-    configure_logger()
-    if features_to_keep <= 0 or features_to_keep >= feature_data.shape[1]:
-        return
-    logging.info(
-        f"Using PCA to reduce {feature_data.shape[1]} dimensions to {features_to_keep}"
-    )
-    feature_data = pd.DataFrame(
-        PCA(features_to_keep).fit_transform(feature_data), index=feature_data.index
-    )
-    if normalize:
-        logging.info("Normalizing the feature to the unit vector")
-        feature_data = feature_data.apply(lambda x: x / np.linalg.norm(x), axis=1)
-    return feature_data
 
 
 # Join all feature data into a single dataframe
 def get_joined_feature_data(feature_map: dict[str, pd.DataFrame]) -> pd.DataFrame:
     joined_feature_data = None
-    logging.info("Joining features %s...", feature_map.keys())
+    logging.debug("Joining features %s...", feature_map.keys())
     for i, (feature_type, feature_data) in enumerate(feature_map.items()):
         if joined_feature_data is None:
             joined_feature_data = feature_data
-            logging.info(
+            logging.debug(
                 "Initial feature data of type %s is shape %s",
                 feature_type,
                 feature_data.shape,
@@ -70,7 +55,7 @@ def get_joined_feature_data(feature_map: dict[str, pd.DataFrame]) -> pd.DataFram
             joined_feature_data = joined_feature_data.join(
                 feature_data, how="inner", lsuffix=f"_{i}"
             )
-            logging.info(
+            logging.debug(
                 "Joined prepared feature data of type %s to make shape %s",
                 feature_type,
                 joined_feature_data.shape,
@@ -100,36 +85,79 @@ def harmonize_and_clean(
             invalid_outcomes, errors="ignore"
         )
     clin_data = clin_data.drop(invalid_outcomes, errors="ignore")
-    logging.info(
+    logging.debug(
         f"Filtered out {len(invalid_outcomes)} invalid clinical cases, {len(clin_data)} remaining"
     )
 
     # We only care about rows we have both feature and clinical data for
     index_intersection = clin_data.index
-    logging.info("Clin data has %s rows", len(clin_data.index))
+    logging.debug("Clin data has %s rows", len(clin_data.index))
     for feature_type, feature_data in feature_data_map.items():
-        logging.info("%s data has %s rows", feature_type, len(feature_data.index))
+        logging.debug("%s data has %s rows", feature_type, len(feature_data.index))
         index_intersection = index_intersection.intersection(feature_data.index)
-        logging.info("cumulative intersection has %s rows", len(index_intersection))
+        logging.debug("cumulative intersection has %s rows", len(index_intersection))
     clin_data = clin_data[clin_data.index.isin(index_intersection)].sort_index()
     for feature_type, feature_data in feature_data_map.items():
         feature_data_map[feature_type] = feature_data[
             feature_data.index.isin(index_intersection)
         ].sort_index()
         assert len(clin_data) == len(feature_data_map[feature_type])
-    logging.info(
+    logging.debug(
         f"The intersection of clinical and feature data is of size {len(clin_data)}"
     )
 
     return clin_data, feature_data_map
 
 
+# Given some feature data, fit a PCA over the training data then transform the training and test data and return them
+def pca_feature_data(
+    train_data: pd.DataFrame,
+    test_data: pd.DataFrame,
+    components: int,
+    args: Namespace,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    configure_logger()
+    # train_data = train_data.sort_index()
+    # test_data = test_data.sort_index()
+    if components > 0 and components < train_data.shape[1]:
+        logging.debug(
+            f"Using PCA to reduce {train_data.shape[1]} dimensions to {components}"
+        )
+        pca = PCA(components, random_state=args.rand_state)
+        pca.fit(train_data)
+        train_data = pd.DataFrame(pca.transform(train_data), index=train_data.index)
+        test_data = pd.DataFrame(pca.transform(test_data), index=test_data.index)
+    else:
+        logging.debug(
+            f"Skipping PCA as {components=} is not applicable with {train_data.shape[1]} dimensions"
+        )
+    logging.debug("Normalizing the transformed feature vectors to the unit vector")
+    test_data = test_data.apply(lambda x: x / np.linalg.norm(x), axis=1)
+    train_data = train_data.apply(
+        lambda x: x / np.linalg.norm(x), axis=1
+    )
+    return train_data, test_data
+
+def join_train_test_features(train_test_feature_data_map: dict[str, tuple[pd.DataFrame, pd.DataFrame]], args: Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
+    train_features = {}
+    test_features = {}
+    for ft, (train, test) in train_test_feature_data_map.items():
+        train_features[ft] = train
+        test_features[ft] = test
+    train_data, test_data = join_features(train_features), join_features(test_features)
+    if args.pca_post_join > 0:
+        train_data, test_data = pca_feature_data(train_data, test_data, args.pca_post_join, args)
+    return train_data, test_data
+
+
+# Columnwise concat feature dataframes
 def join_features(feature_data_map: dict[str, pd.DataFrame]) -> pd.DataFrame:
     configure_logger()
-    label = feature_label(feature_data_map.keys())
-    logging.info(f"START JOIN {label}")
+    fid = feature_id(feature_data_map.keys())
+    logging.debug(f"START JOIN {fid}")
     assert set(feature_data_map.keys()).issubset(ELIGIBLE_FEATURE_TYPES)
     feature_data = get_joined_feature_data(feature_data_map)
     feature_data.columns = feature_data.columns.astype(str)
-    logging.info(f"Join {label} finished!")
+    logging.debug(f"Join {fid} finished!")
     return feature_data
+
