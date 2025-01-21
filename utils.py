@@ -58,7 +58,7 @@ def get_feature_sets(features: Iterable[str]) -> list[set]:
     for subset in list(pset):
         # Remove any generated subsets with incompatible feature types
         for ift_set in INCOMPATIBLE_FEATURE_TYPES:
-            if ift_set.issubset(subset):
+            if len(ift_set.intersection(subset)) > 1:
                 pset.remove(subset)
                 break
     return list(pset)

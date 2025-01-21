@@ -81,7 +81,7 @@ def parse() -> argparse.Namespace:
     parser.add_argument(
         "--rand_state",
         type=int,
-        help="Random state to initialize fold distribution",
+        help="Random state",
         default=42,
     )
     parser.add_argument(
@@ -89,7 +89,7 @@ def parse() -> argparse.Namespace:
         type=str,
         choices=["train", "analyze", "all"],
         default="train",
-        help="The mode to run in. 'train' trains models and dumps their weights to the filesystem. 'analyze' intakes dumped models and outputs stats and figures. 'both' does both.",
+        help="The mode to run in. 'train' trains models and dumps their weights to the filesystem. 'analyze' intakes dumped models and outputs stats and figures. 'both' does both. TODO: Doesn't do anything right now lol",
     )
     parser.add_argument(
         "--rundir",
