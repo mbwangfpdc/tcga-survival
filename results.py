@@ -12,7 +12,6 @@ import pandas as pd
 import numpy as np
 from typing import Self
 from collections import defaultdict
-from utils import model_type_and_fold
 
 
 class ModelResults:
@@ -61,45 +60,6 @@ class ModelResults:
                 cum_haz=np.ndarray(data["cum_haz"]),
                 surv=np.ndarray(data["surv"]),
             )
-
-
-# For each model type, aggregate its folds into a average and stdev ModelResults.
-def agg_models_by_type(
-    model_map: dict[str, ModelResults]
-) -> dict[str, tuple[ModelResults, ModelResults]]:
-    aggregated = defaultdict(list)
-    for model_id, model in model_map:
-        # Drop fold identifier during aggregation
-        true_id, _ = model_type_and_fold(model_id)
-        aggregated[true_id].append(model)
-    for model_id, models in aggregated.items():
-        avg_score, std_score = mean_std_floats(map(lambda m: m.score, models))
-        avg_duration, std_duration = mean_std_floats(map(lambda m: m.duration, models))
-        avg_weights, std_weights = mean_std_ndarrays(map(lambda m: m.weights, models))
-        index = models[0].index
-        avg_risk, std_risk = mean_std_ndarrays(map(lambda m: m.risk, models))
-        avg_cum_haz, std_cum_haz = mean_std_ndarrays(map(lambda m: m.cum_haz, models))
-        avg_surv, std_surv = mean_std_ndarrays(map(lambda m: m.surv, models))
-        aggregated[model_id] = (
-            ModelResults(
-                score=avg_score,
-                duration=avg_duration,
-                weights=avg_weights,
-                index=index,
-                risk=avg_risk,
-                cum_haz=avg_cum_haz,
-                surv=avg_surv,
-            ),
-            ModelResults(
-                score=std_score,
-                duration=std_duration,
-                weights=std_weights,
-                index=index,
-                risk=std_risk,
-                cum_haz=std_cum_haz,
-                surv=std_surv,
-            ),
-        )
 
 
 # Given a list of ndarrays of equal size, return two ndarrays of that size.

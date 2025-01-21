@@ -29,13 +29,8 @@ def configure_logger():
 
 
 # Given the types of features, return the label
-def feature_id(feature_subset: Iterable[str]):
+def feature_set_label(feature_subset: Iterable[str]):
     return FEATURE_ID_DELIM.join(sorted(list(feature_subset)))
-
-
-def model_type_and_fold(model_id: str) -> tuple[str, int]:
-    split = model_id.rsplit("_", 1)
-    return split[0], int(split[1])
 
 
 # Given a set, return a set containing all possible subsets

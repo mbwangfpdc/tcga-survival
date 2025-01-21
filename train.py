@@ -16,7 +16,7 @@ from joblib import Parallel, delayed
 from globals import OUTPUT_PATH
 from dataprep import join_features, pca_feature_data
 
-from utils import configure_logger, feature_id
+from utils import configure_logger, feature_set_label
 from results import ModelResults
 
 SINGLE_THREADED_MODELS = set(["cox", "gb", "cgb", "ipcr"])

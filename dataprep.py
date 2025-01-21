@@ -1,6 +1,6 @@
 from sklearn.decomposition import PCA
 from globals import ELIGIBLE_FEATURE_TYPES, CLINICAL_TSV_PATH, DATA_PATH
-from utils import configure_logger, feature_id
+from utils import configure_logger, feature_set_label
 from argparse import Namespace
 import pandas as pd
 import numpy as np
@@ -186,7 +186,7 @@ def join_train_test_features(train_test_feature_data_map: dict[str, tuple[pd.Dat
 # Columnwise concat feature dataframes
 def join_features(feature_data_map: dict[str, pd.DataFrame]) -> pd.DataFrame:
     configure_logger()
-    fid = feature_id(feature_data_map.keys())
+    fid = feature_set_label(feature_data_map.keys())
     logging.debug(f"START JOIN {fid}")
     assert set(feature_data_map.keys()).issubset(ELIGIBLE_FEATURE_TYPES)
     feature_data = get_joined_feature_data(feature_data_map)

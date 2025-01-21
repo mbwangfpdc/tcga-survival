@@ -104,7 +104,7 @@ def main():
     feature_subsets: list[set[str]] = get_feature_sets(args.features) + [
         set([f]) for f in args.solo_features
     ]
-    feature_subsets.sort(key=feature_id)
+    feature_subsets.sort(key=feature_set_label)
 
     logging.debug("initializing loky backend...")
     with parallel_config(backend="loky", n_jobs=-3):
@@ -136,7 +136,7 @@ def main():
                 for fold in range(args.folds):
                     for feature_subset in feature_subsets:
                         if len(feature_subset) > 1:
-                            fid = feature_id(feature_subset)
+                            fid = feature_set_label(feature_subset)
                             data_maps[fold][fid] = join_features(
                                 {ft: data_maps[fold][ft] for ft in feature_subset}
                             )
@@ -232,7 +232,7 @@ def main():
                         # TODO: should we parallelize this?
                         metamodel.fit(train_predictions, train_outcomes[fold])
                         predictions = metamodel.predict(predictions)
-                    scores[fold][feature_id(feature_subset)] = calculate_c_index(
+                    scores[fold][feature_set_label(feature_subset)] = calculate_c_index(
                         train_outcomes[fold],
                         test_outcomes[fold],
                         predictions,

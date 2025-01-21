@@ -78,7 +78,7 @@ def print_analysis(run_dir: str):
     for features, mean, std, diff, diff_std, strong, weak in sorted_combos:
         strong_score = score_map[strong][0]
         weak_score = score_map[weak][0]
-        print(f"{feature_id(features)},{mean:.5f},{strong_score:.5f},{weak_score:.5f},{feature_id(strong)},{std:.5f},{diff_std:.5f}")
+        print(f"{feature_set_label(features)},{mean:.5f},{strong_score:.5f},{weak_score:.5f},{feature_set_label(strong)},{std:.5f},{diff_std:.5f}")
 
 if __name__ == "__main__":
     print_analysis(sys.argv[1])
