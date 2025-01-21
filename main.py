@@ -3,7 +3,11 @@
 from sklearn import set_config
 from sklearn.model_selection import StratifiedKFold
 from sksurv.linear_model import CoxPHSurvivalAnalysis, IPCRidge
-from sksurv.metrics import as_concordance_index_ipcw_scorer, concordance_index_ipcw
+from sksurv.metrics import (
+    as_concordance_index_ipcw_scorer,
+    concordance_index_ipcw,
+    concordance_index_censored,
+)
 from joblib import Parallel, delayed, parallel_config
 from collections import defaultdict
 from scipy.stats import rankdata
@@ -14,6 +18,7 @@ import time
 import logging
 import os
 import json
+import shutil
 
 from dataprep import *
 from globals import *
@@ -21,36 +26,40 @@ from utils import *
 from train import dispatch_train, TrainInputs, SINGLE_THREADED_MODELS
 from parser import parse
 
-# Consume a stream of (train_data, test_data) and emit a stream of PCA-reduced train, test) pairs
-# def pca_feature_data_parallel(train_data: pd.DataFrame,
-#     test_data: pd.DataFrame,
-#     args: argparse.Namespace,):
-#     return pd.DataFrame(pca.transform(df), index=df.index)
 
-
-def prepare_outcomes(clin_data: pd.DataFrame) -> pd.DataFrame:
-    outcomes = clin_data[["days_to_death", "days_to_last_follow_up"]].copy()
-    # Days to death is either -1 (no death before censoring) or greater than days_to_last_follow_up,
-    # we can just take the max to get the days to censor | death
-    outcomes["days_to_event"] = outcomes[
-        ["days_to_death", "days_to_last_follow_up"]
-    ].max(axis=1)
-    outcomes["death_witnessed"] = outcomes["days_to_death"] != -1
-    logging.debug(
-        f"{len(outcomes[outcomes['death_witnessed']])} deaths witnessed out of {len(outcomes)} total samples"
-    )
-    return outcomes[["death_witnessed", "days_to_event"]]
+def calculate_c_index(
+    train_outcomes: pd.DataFrame, test_outcomes: pd.DataFrame, predictions: np.ndarray
+) -> float:
+    if True:
+        return concordance_index_censored(
+            test_outcomes["death_witnessed"],
+            test_outcomes["days_to_event"],
+            predictions,
+        )[0]
+    else:
+        return concordance_index_ipcw(
+            train_outcomes,
+            test_outcomes,
+            predictions,
+        )[0]
 
 
 def main():
     args = parse()
+    # feature_subsets: list[set[str]] = get_feature_sets(args.features) + [
+    #     set([f]) for f in args.solo_features
+    # ]
+    # # print(feature_subsets)
+    # exit(0)
 
     start = time.time()
     configure_logger()
     set_config(display="text")  # displays text representation of estimators
 
     run_dir = os.path.join(OUTPUT_PATH, args.rundir)
-    os.makedirs(run_dir, exist_ok=True)
+    if os.path.exists(run_dir):
+        shutil.rmtree(run_dir)
+    os.makedirs(run_dir)
     logging.info(f"Created run directory at {run_dir}")
 
     # All data is always loaded from disk to make the datasets between modalities identical
@@ -122,6 +131,7 @@ def main():
                 test_feature_data[fold][ft] = test
 
         if args.ensemble == "cat":
+
             def cat_unimodal_data(data_maps: list[dict[str, pd.DataFrame]]):
                 for fold in range(args.folds):
                     for feature_subset in feature_subsets:
@@ -130,6 +140,7 @@ def main():
                             data_maps[fold][fid] = join_features(
                                 {ft: data_maps[fold][ft] for ft in feature_subset}
                             )
+
             cat_unimodal_data(train_feature_data)
         train_inputs: list[TrainInputs] = []
         for fold, feature_data_map in enumerate(train_feature_data):
@@ -189,13 +200,23 @@ def main():
                     )
         elif args.ensemble in ["mean", "meanrank", "cox", "ipcr"]:
             for fold, model_map in enumerate(models):
+                if args.ensemble in ["cox", "ipcr"]:
+                    train_pred_map = {
+                            feature: model.predict(train_feature_data[fold][feature])
+                            for feature, model in model_map.items()
+                        }
                 pred_map = {
                     feature: model.predict(test_feature_data[fold][feature])
                     for feature, model in model_map.items()
                 }
                 for feature_subset in feature_subsets:
-                    predictions = np.array([pred_map[f] for f in feature_subset]).transpose()
-                    # subpredictions = map(lambda pre)
+                    if args.ensemble in ["cox", "ipcr"]:
+                        train_predictions = np.array(
+                            [train_pred_map[f] for f in feature_subset]
+                        ).transpose()
+                    predictions = np.array(
+                        [pred_map[f] for f in feature_subset]
+                    ).transpose()
                     if args.ensemble == "mean":
                         predictions = np.mean(predictions, axis=1)
                     elif args.ensemble == "meanrank":
@@ -204,18 +225,18 @@ def main():
                     elif args.ensemble == "cox":
                         metamodel = CoxPHSurvivalAnalysis()
                         # TODO: should we parallelize this?
-                        metamodel.fit(predictions, test_outcomes[fold])
+                        metamodel.fit(train_predictions, train_outcomes[fold])
                         predictions = metamodel.predict(predictions)
                     elif args.ensemble == "ipcr":
                         metamodel = IPCRidge(random_state=args.rand_state)
                         # TODO: should we parallelize this?
-                        metamodel.fit(predictions, test_outcomes[fold])
+                        metamodel.fit(train_predictions, train_outcomes[fold])
                         predictions = metamodel.predict(predictions)
-                    scores[fold][feature_id(feature_subset)] = concordance_index_ipcw(
+                    scores[fold][feature_id(feature_subset)] = calculate_c_index(
                         train_outcomes[fold],
                         test_outcomes[fold],
                         predictions,
-                    )[0] # TODO: is there any use for the other components? maybe consider saving
+                    )  # TODO: is there any use for the other components? maybe consider saving
         else:
             # Unreachable
             assert False
@@ -231,6 +252,7 @@ def main():
             json.dump(run, run_json)
 
     logging.info(f"Finished in {time.time() - start} seconds total.")
+    logging.info(f"Rundir was {run_dir}")
 
 
 if __name__ == "__main__":

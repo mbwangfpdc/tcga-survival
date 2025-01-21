@@ -63,6 +63,21 @@ def get_joined_feature_data(feature_map: dict[str, pd.DataFrame]) -> pd.DataFram
     return joined_feature_data
 
 
+# Calculate and extract columns relevant for sksurv
+def prepare_outcomes(clin_data: pd.DataFrame) -> pd.DataFrame:
+    outcomes = pd.DataFrame()
+    # clin_data[["days_to_death", "days_to_last_follow_up", "vital_status"]].copy()
+    outcomes["days_to_event"] = clin_data[
+        ["days_to_death", "days_to_last_follow_up"]
+    ].max(axis=1)
+    outcomes["death_witnessed"] = clin_data["vital_status"] == "Dead"
+    outcomes["death_witnessed"] = clin_data["days_to_death"] != -1
+    logging.debug(
+        f"{len(outcomes[outcomes['death_witnessed']])} deaths witnessed out of {len(outcomes)} total samples"
+    )
+    return outcomes[["death_witnessed", "days_to_event"]]
+
+
 # Return a harmonized and cleaned version of clin_data and feature_data
 # After this:
 #   * Invalid clinical rows where outcomes are not usable will be removed
@@ -71,22 +86,40 @@ def get_joined_feature_data(feature_map: dict[str, pd.DataFrame]) -> pd.DataFram
 def harmonize_and_clean(
     clin_data: pd.DataFrame, feature_data_map: dict[str, pd.DataFrame]
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    import re
+    regex = re.compile(r"^('--|unknown|not reported)$", re.IGNORECASE)
+    clin_data.replace(regex, "'--", inplace=True, regex=True)
     clin_data[["days_to_death", "days_to_last_follow_up"]] = (
         clin_data[["days_to_death", "days_to_last_follow_up"]]
         .replace("'--", "-1")
         .astype(float)
         .astype(int)
     )
-    invalid_outcomes = clin_data[
-        (clin_data["days_to_death"] < 0) & (clin_data["days_to_last_follow_up"] < 0)
-    ].index
+    ok_outcome_predicate = (
+        (clin_data["vital_status"] == "Alive") &
+        (clin_data["days_to_death"] < 0) &
+        (clin_data["days_to_last_follow_up"] >= 0)
+    ) | (
+        (clin_data["vital_status"] == "Dead") &
+        (clin_data["days_to_death"] >= 0) &
+        (clin_data["days_to_last_follow_up"] <= clin_data["days_to_death"])
+    )
+    invalid_outcomes_index = clin_data[~ok_outcome_predicate].index
+    # TODO: Tell steven about this, probably revert? Save the rows
+    # invalid_outcomes_index = clin_data[
+    #     (clin_data["days_to_death"] < 0) & (clin_data["days_to_last_follow_up"] < 0)
+    # ].index
+    # print(clin_data[["days_to_death", "days_to_last_follow_up", "vital_status"]].loc[invalid_outcomes_index.difference(invalid_outcomes_index_2)])
+    # # print(clin_data[["days_to_death", "days_to_last_follow_up"]].loc[invalid_outcomes_index & ~])
+    # exit(1)
+
     for feature_type in feature_data_map:
         feature_data_map[feature_type] = feature_data_map[feature_type].drop(
-            invalid_outcomes, errors="ignore"
+            invalid_outcomes_index, errors="ignore"
         )
-    clin_data = clin_data.drop(invalid_outcomes, errors="ignore")
+    clin_data = clin_data.drop(invalid_outcomes_index, errors="ignore")
     logging.debug(
-        f"Filtered out {len(invalid_outcomes)} invalid clinical cases, {len(clin_data)} remaining"
+        f"Filtered out {len(invalid_outcomes_index)} invalid clinical cases, {len(clin_data)} remaining"
     )
 
     # We only care about rows we have both feature and clinical data for
