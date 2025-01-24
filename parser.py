@@ -48,8 +48,15 @@ def parse() -> argparse.Namespace:
         "--ensemble",
         type=str,
         help="The way trained models are ensembled",
-        default=["cat"],
+        default="mean",
         choices=["cat", "mean", "meanrank", "cox", "ipcr"],
+    )
+    parser.add_argument(
+        "--cindex",
+        type=str,
+        help="Which measure of survival to use",
+        default="harrel",
+        choices=["harrel", "uno"],
     )
     parser.add_argument(
         "--n_iter",
@@ -94,7 +101,7 @@ def parse() -> argparse.Namespace:
     parser.add_argument(
         "--rundir",
         type=str,
-        help="Name of subdirectory of ./results to dump results to.",
+        help="Name of subdirectory of ./results to dump results to, or 'dryrun' to emit no files.",
         default=get_timestamp(),
     )
     args = parser.parse_args()

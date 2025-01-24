@@ -113,7 +113,7 @@ def train_model(
     #         )
     #     inp.train_data = {feature_id(inp.train_data.keys()): train_data}
     # predictions = []
-    estimator = as_concordance_index_ipcw_scorer(make_estimator(args))
+    estimator = make_estimator(args)
     estimator.fit(inp.data, inp.outcomes)
     logging.debug(f"[{inp.model_id}] Finished after {time.time() - start} seconds")
     return estimator

@@ -95,20 +95,20 @@ def harmonize_and_clean(
         .astype(float)
         .astype(int)
     )
-    ok_outcome_predicate = (
-        (clin_data["vital_status"] == "Alive") &
-        (clin_data["days_to_death"] < 0) &
-        (clin_data["days_to_last_follow_up"] >= 0)
-    ) | (
-        (clin_data["vital_status"] == "Dead") &
-        (clin_data["days_to_death"] >= 0) &
-        (clin_data["days_to_last_follow_up"] <= clin_data["days_to_death"])
-    )
-    invalid_outcomes_index = clin_data[~ok_outcome_predicate].index
+    # ok_outcome_predicate = (
+    #     (clin_data["vital_status"] == "Alive") &
+    #     (clin_data["days_to_death"] < 0) &
+    #     (clin_data["days_to_last_follow_up"] > 0)
+    # ) | (
+    #     (clin_data["vital_status"] == "Dead") &
+    #     (clin_data["days_to_death"] > 0) &
+    #     (clin_data["days_to_last_follow_up"] <= clin_data["days_to_death"])
+    # )
+    # invalid_outcomes_index = clin_data[~ok_outcome_predicate].index
     # TODO: Tell steven about this, probably revert? Save the rows
-    # invalid_outcomes_index = clin_data[
-    #     (clin_data["days_to_death"] < 0) & (clin_data["days_to_last_follow_up"] < 0)
-    # ].index
+    invalid_outcomes_index = clin_data[
+        (clin_data["days_to_death"] < 0) & (clin_data["days_to_last_follow_up"] < 0)
+    ].index
     # print(clin_data[["days_to_death", "days_to_last_follow_up", "vital_status"]].loc[invalid_outcomes_index.difference(invalid_outcomes_index_2)])
     # # print(clin_data[["days_to_death", "days_to_last_follow_up"]].loc[invalid_outcomes_index & ~])
     # exit(1)
