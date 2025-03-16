@@ -1,6 +1,7 @@
 from typing import Iterable
 from itertools import chain, combinations
 from globals import INCOMPATIBLE_FEATURE_TYPES, FEATURE_ID_DELIM
+import numpy as np
 import pandas as pd
 import logging
 import datetime
@@ -29,8 +30,11 @@ def configure_logger():
 
 
 # Given the types of features, return the label
-def feature_set_label(feature_subset: Iterable[str]):
+def feature_set_label(feature_subset: Iterable[str]) -> str:
     return FEATURE_ID_DELIM.join(sorted(list(feature_subset)))
+
+def feature_set_from_label(label: str) -> Iterable[str]:
+    return label.split(FEATURE_ID_DELIM)
 
 
 # Given a set, return a set containing all possible subsets
@@ -75,3 +79,6 @@ def set_partitions(s: set) -> list[tuple[set, set]]:
         returned.add(complement)
         res.append((subset, complement))
     return res
+
+def outcomes_to_array(df: pd.DataFrame) -> np.rec.recarray:
+    return df[["death_witnessed", "days_to_event"]].to_records(index=False)

@@ -64,7 +64,7 @@ def get_joined_feature_data(feature_map: dict[str, pd.DataFrame]) -> pd.DataFram
 
 
 # Calculate and extract columns relevant for sksurv
-def prepare_outcomes(clin_data: pd.DataFrame) -> pd.DataFrame:
+def prepare_outcomes(clin_data: pd.DataFrame, args: Namespace) -> pd.DataFrame:
     outcomes = pd.DataFrame()
     # clin_data[["days_to_death", "days_to_last_follow_up", "vital_status"]].copy()
     outcomes["days_to_event"] = clin_data[
@@ -72,10 +72,12 @@ def prepare_outcomes(clin_data: pd.DataFrame) -> pd.DataFrame:
     ].max(axis=1)
     outcomes["death_witnessed"] = clin_data["vital_status"] == "Dead"
     outcomes["death_witnessed"] = clin_data["days_to_death"] != -1
+    if args.test_group_by:
+        outcomes["group"] = clin_data[args.test_group_by]
     logging.debug(
         f"{len(outcomes[outcomes['death_witnessed']])} deaths witnessed out of {len(outcomes)} total samples"
     )
-    return outcomes[["death_witnessed", "days_to_event"]]
+    return outcomes
 
 
 # Return a harmonized and cleaned version of clin_data and feature_data
@@ -117,7 +119,7 @@ def harmonize_and_clean(
         feature_data_map[feature_type] = feature_data_map[feature_type].drop(
             invalid_outcomes_index, errors="ignore"
         )
-    clin_data = clin_data.drop(invalid_outcomes_index, errors="ignore")
+    clin_data.drop(invalid_outcomes_index, inplace=True, errors="ignore")
     logging.debug(
         f"Filtered out {len(invalid_outcomes_index)} invalid clinical cases, {len(clin_data)} remaining"
     )
@@ -129,6 +131,7 @@ def harmonize_and_clean(
         logging.debug("%s data has %s rows", feature_type, len(feature_data.index))
         index_intersection = index_intersection.intersection(feature_data.index)
         logging.debug("cumulative intersection has %s rows", len(index_intersection))
+    # TODO: does sorting the index here do anything?
     clin_data = clin_data[clin_data.index.isin(index_intersection)].sort_index()
     for feature_type, feature_data in feature_data_map.items():
         feature_data_map[feature_type] = feature_data[
@@ -142,45 +145,44 @@ def harmonize_and_clean(
     return clin_data, feature_data_map
 
 
-# Given some feature data, fit a PCA over the training data then transform the training and test data and return them
-def pca_feature_data(
+# Given some feature data, fit a PCA over the training data then return the transformed data along with the model
+def train_pca(
     train_data: pd.DataFrame,
-    test_data: pd.DataFrame,
     components: int,
     args: Namespace,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, PCA | None]:
     configure_logger()
     # train_data = train_data.sort_index()
     # test_data = test_data.sort_index()
+    pca = None
     if components > 0 and components < train_data.shape[1]:
         logging.debug(
             f"Using PCA to reduce {train_data.shape[1]} dimensions to {components}"
         )
         pca = PCA(components, random_state=args.rand_state)
         pca.fit(train_data)
-        train_data = pd.DataFrame(pca.transform(train_data), index=train_data.index)
-        test_data = pd.DataFrame(pca.transform(test_data), index=test_data.index)
     else:
         logging.debug(
             f"Skipping PCA as {components=} is not applicable with {train_data.shape[1]} dimensions"
         )
     logging.debug("Normalizing the transformed feature vectors to the unit vector")
-    test_data = test_data.apply(lambda x: x / np.linalg.norm(x), axis=1)
-    train_data = train_data.apply(
-        lambda x: x / np.linalg.norm(x), axis=1
-    )
-    return train_data, test_data
+    return apply_pca(train_data, pca), pca
 
-def join_train_test_features(train_test_feature_data_map: dict[str, tuple[pd.DataFrame, pd.DataFrame]], args: Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
-    train_features = {}
-    test_features = {}
-    for ft, (train, test) in train_test_feature_data_map.items():
-        train_features[ft] = train
-        test_features[ft] = test
-    train_data, test_data = join_features(train_features), join_features(test_features)
-    if args.pca_post_join > 0:
-        train_data, test_data = pca_feature_data(train_data, test_data, args.pca_post_join, args)
-    return train_data, test_data
+def apply_pca(data: pd.DataFrame, pca: PCA | None) -> pd.DataFrame:
+    if pca:
+        data = pd.DataFrame(pca.transform(data), index=data.index)
+    return data.apply(lambda x: x / np.linalg.norm(x), axis=1)
+
+# def join_train_test_features(train_test_feature_data_map: dict[str, tuple[pd.DataFrame, pd.DataFrame]], args: Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
+#     train_features = {}
+#     test_features = {}
+#     for ft, (train, test) in train_test_feature_data_map.items():
+#         train_features[ft] = train
+#         test_features[ft] = test
+#     train_data, test_data = join_features(train_features), join_features(test_features)
+#     if args.pca_post_join > 0:
+#         train_data, test_data = pca_feature_data(train_data, test_data, args.pca_post_join, args)
+#     return train_data, test_data
 
 
 # Columnwise concat feature dataframes

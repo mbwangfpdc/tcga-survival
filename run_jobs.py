@@ -4,13 +4,9 @@ import time
 
 # Run these different configuration combinations
 
-pca_sizes = [64, 128, 256, 512]
+pca_sizes = [4, 8, 16, 32, 64, 128, 256, 512]
 models = ["cox"]
-ensembles = ["cox", "mean", "meanrank", "cat"]
-
-# pca_sizes = [64]
-# models = ["cox"]
-# ensembles = ["cox", "cat"]
+ensembles = ["mean", "cox"]
 
 for pca_size in pca_sizes:
     for model in models:
